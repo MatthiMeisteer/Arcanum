@@ -2748,6 +2748,7 @@ roughnessFactor = clamp(roughnessFactor * mix(1.04, 0.80, smoothstep(0.3, 0.9, s
     const special = spell === 'accedit' || spell === 'leviatum' || spell === 'glacia' || spell === 'deponere' || spell === 'fulgur' || spell === 'ventus' || spell === 'florescere' || spell === 'retrogradus' || spell === 'umbra';
     if (dummy.freezeLeft > 0 && spell !== 'glacia') shatterIce(true); // bevroren: het ijs breekt bij een treffer
     _dp.copy(pos);
+    spellImpactFx(_dp, pal, scale);
     _dd.copy(vel).normalize();
     const floating = !special && spell !== 'inversum' && spell !== 'repello' && spell !== 'pyrotechnicum' && spell !== 'oerworp' && dummy.mode === 'float';
     const mag = special ? 0.8 : (floating ? 1.0 : (spell === 'sectummembra' ? 4.5 : (spell === 'repello' ? 5.5 : (spell === 'pyrotechnicum' ? 2.5 : (spell === 'oerworp' ? 5 : 2.2 + scale * 1.6)))));
@@ -3150,6 +3151,42 @@ roughnessFactor = clamp(roughnessFactor * mix(1.04, 0.80, smoothstep(0.3, 0.9, s
         return true;
       }
     });
+  }
+
+  function spellImpactFx(pos, pal, scale) {
+    const size = Math.sqrt(Math.max(0.3, scale));
+    flashSprite(pos, pal.hot, 0.55 * size, 0.14, 1.8, starTex);
+    const facing = viewCam.getWorldQuaternion(new THREE.Quaternion());
+    for (let i = 0; i < 2; i++) {
+      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+        color: i ? pal.main : pal.hot, transparent: true, opacity: 0.8,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+      }));
+      ring.position.copy(pos);
+      ring.quaternion.copy(facing);
+      ring.scale.setScalar(0.16 * size);
+      scene.add(ring);
+      let t = -i * 0.07;
+      effects.push({
+        update: function (dt) {
+          t += dt;
+          if (t < 0) return true;
+          const k = Math.min(t / (i ? 0.34 : 0.27), 1);
+          ring.scale.setScalar((0.16 + k * 1.45) * size);
+          ring.rotation.z += dt * (i ? -2.5 : 3.2);
+          ring.material.opacity = 0.8 * (1 - k);
+          if (k >= 1) { scene.remove(ring); ring.material.dispose(); return false; }
+          return true;
+        }
+      });
+    }
+    for (let i = 0; i < 10; i++) {
+      const a = Math.random() * Math.PI * 2, h = Math.random() * 2 - 1;
+      _tmp.set(Math.cos(a) * Math.sqrt(1 - h * h), h, Math.sin(a) * Math.sqrt(1 - h * h));
+      _tmp2.copy(pos).addScaledVector(_tmp, 0.12 * size);
+      _tmp.multiplyScalar(2.5 + Math.random() * 4.5);
+      spawnParticle(_tmp2, _tmp, i % 3 ? pal.main : pal.hot, 0.07 + Math.random() * 0.07, 0.28 + Math.random() * 0.22, 0);
+    }
   }
 
   function takeLight() {
@@ -3773,7 +3810,7 @@ roughnessFactor = clamp(roughnessFactor * mix(1.04, 0.80, smoothstep(0.3, 0.9, s
     const upv = new THREE.Vector3().crossVectors(right, dir).normalize();
     const pl = takeLight();
     if (pl) pl.light.color.setHex(pal.main);
-    projectiles.push({ pal: pal, spell: c.spell || 'basic', g: g, pos: g.position, prev: g.position.clone(), vel: dir.clone().multiplyScalar(c.speed), life: 0, light: pl, scale: c.scale, finisher: c.kind === 'bolt', parts: parts, flare: flare, right: right, upv: upv });
+    projectiles.push({ pal: pal, spell: c.spell || 'basic', kind: c.kind, g: g, pos: g.position, prev: g.position.clone(), vel: dir.clone().multiplyScalar(c.speed), life: 0, light: pl, scale: c.scale, finisher: c.kind === 'bolt', parts: parts, flare: flare, right: right, upv: upv });
 
     // muzzle flash: flits, vonkenboog, licht aan de stokpunt
     tipFlash = 1;
@@ -6159,16 +6196,19 @@ function buildGarments(D) {
       prevTipValid = false;
     }
 
-    // finisher laadt op: vonken stromen naar de stokpunt, gloed groeit
-    if (c && !castSpecial && castIdx === COMBO.length - 1 && !castFired) {
-      const charge = Math.min(p / c.fireAt, 1);
-      for (let i = 0; i < 2; i++) {
-        _tmp2.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(0.35 + Math.random() * 0.25);
+    // elke spreuk verzamelt kleurige vonken rond de stokpunt voordat ze wordt afgevuurd
+    if (c && !castFired && started && p > 0.12) {
+      const charge = Math.min(p / Math.max(c.fireAt, 0.01), 1);
+      const count = castSpecial || castIdx === COMBO.length - 1 ? 2 : 1;
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2, h = Math.random() * 2 - 1;
+        const r = 0.16 + Math.random() * 0.2 + (1 - charge) * 0.18;
+        _tmp2.set(Math.cos(a) * Math.sqrt(1 - h * h) * r, h * r, Math.sin(a) * Math.sqrt(1 - h * h) * r);
         _tmp.copy(_tip).add(_tmp2);
-        _tmp2.multiplyScalar(-6);
-        spawnParticle(_tmp, _tmp2, Math.random() < 0.5 ? HOT : RED, 0.07 + Math.random() * 0.06, 0.15, 0);
+        _tmp2.multiplyScalar(-2 - charge * 5);
+        spawnParticle(_tmp, _tmp2, i % 2 ? curPal.hot : curPal.main, 0.06 + Math.random() * 0.06, 0.18 + Math.random() * 0.12, 0);
       }
-      tipFlash = Math.max(tipFlash, charge * 0.9);
+      tipFlash = Math.max(tipFlash, charge * (castIdx === COMBO.length - 1 ? 0.9 : 0.55));
     }
 
     if (fire) fireSpell(c);
@@ -6225,8 +6265,13 @@ function buildGarments(D) {
         projectiles.splice(i, 1);
         continue;
       }
-      if (p.flare) p.flare.material.rotation += dt * 4;
-      if (p.light) { p.light.light.position.copy(p.pos); p.light.light.intensity = 2 + p.scale; }
+      if (p.flare) p.flare.material.rotation += dt * (4 + p.scale);
+      if (p.kind !== 'slash') {
+        const pulse = 0.9 + 0.1 * Math.sin(p.life * 26);
+        p.parts[0].scale.setScalar(1.5 * p.scale * pulse);
+        p.parts[1].scale.setScalar(0.7 * p.scale * (1.2 - pulse));
+      }
+      if (p.light) { p.light.light.position.copy(p.pos); p.light.light.intensity = (1.7 + 0.6 * Math.sin(p.life * 24)) * p.scale; }
 
       // spoor: middenstreep + dubbele spiraal
       for (let k = 0; k < 2; k++) {
